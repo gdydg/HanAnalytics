@@ -1,0 +1,10 @@
+{
+  "name": "pages-functions",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "ua-parser-js": "^2.0.2",
+    "dayjs": "^1.11.13"
+  }
+}
+
