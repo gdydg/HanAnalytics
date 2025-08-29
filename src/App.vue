@@ -137,7 +137,7 @@
           </Card>
         </div>
 
-        <div class="pt-6 grid xl:grid-cols-3 gap-[16px] md:grid-cols-2 sm:grid-cols-1">
+        <div class="pt-6 grid xl:grid-cols-2 gap-[16px] md:grid-cols-2 sm:grid-cols-1">
           <Card class="box-border flex flex-col w-full h-[460px] overflow-hidden">
             <CardHeader>
               <CardTitle>Browsers</CardTitle>
@@ -192,6 +192,31 @@
 
           <Card class="box-border flex flex-col w-full h-[460px] overflow-hidden">
             <CardHeader>
+              <CardTitle>IP Addresses</CardTitle>
+            </CardHeader>
+            <CardContent class="box-border pt-0 w-full h-full overflow-hidden">
+              <ScrollArea class="box-border p-2 pt-0 h-full w-full pages-list" v-if="resData.ip != undefined">
+                <p class="page-item" v-for="(i, idx) in resData.ip" :key="idx">
+                  <span class="line-clamp-1">{{ i.name || '(Unknown IP)' }}</span>
+                  <span class="line-clamp-1">{{ i.value }}</span>
+                  <em>{{ i.per }}<i :style="{ width: i.per }"></i></em>
+                </p>
+              </ScrollArea>
+              <div class="space-y-4 pt-8 w-full" v-else>
+                <Skeleton class="h-6 w-60" />
+                <Skeleton class="h-6 w-80" />
+                <Skeleton class="h-6 w-100" />
+                <Skeleton class="h-6 w-60" />
+                <Skeleton class="h-6 w-80" />
+                <Skeleton class="h-6 w-100" />
+                <Skeleton class="h-6 w-80" />
+                <Skeleton class="h-6 w-full" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card class="box-border flex flex-col w-full h-[460px] overflow-hidden">
+            <CardHeader>
               <CardTitle>Areas</CardTitle>
             </CardHeader>
             <CardContent class="box-border pt-0 w-full h-full overflow-hidden">
@@ -215,32 +240,8 @@
               </div>
             </CardContent>
           </Card>
-
-          <Card class="box-border flex flex-col w-full h-[460px] overflow-hidden">
-            <CardHeader>
-              <CardTitle>IP Addresses</CardTitle>
-            </CardHeader>
-            <CardContent class="box-border pt-0 w-full h-full overflow-hidden">
-              <ScrollArea class="box-border p-2 pt-0 h-full w-full pages-list" v-if="resData.ip != undefined">
-                <p class="page-item" v-for="(i, idx) in resData.ip" :key="idx">
-                  <span class="line-clamp-1">{{ i.name || '(Unknown IP)' }}</span>
-                  <span class="line-clamp-1">{{ i.value }}</span>
-                  <em>{{ i.per }}<i :style="{ width: i.per }"></i></em>
-                </p>
-              </ScrollArea>
-              <div class="space-y-4 pt-8 w-full" v-else>
-                <Skeleton class="h-6 w-60" />
-                <Skeleton class="h-6 w-80" />
-                <Skeleton class="h-6 w-100" />
-                <Skeleton class="h-6 w-60" />
-                <Skeleton class="h-6 w-80" />
-                <Skeleton class="h-6 w-100" />
-                <Skeleton class="h-6 w-80" />
-                <Skeleton class="h-6 w-full" />
-              </div>
-            </CardContent>
-          </Card>
         </div>
+      <div ref="mapDOM" class="map-view"></div>
       </section>
     </main>
     <footer>
@@ -364,6 +365,7 @@ const getDatas = async () => {
           }
           if (!data.success) return toast({ description: data.message, variant: 'destructive' });
           tempResData.value[i] = i == 'echarts' ? renderEcharts(data.data.map((i: any) => `${i.name}${['today', '1d'].includes(timeValue.value) ? '点' : '日'}`), data.data.map((i: any) => `${i.value}`)) : data.data
+          if (i === 'area') renderWorldMap(data.data)
         } catch (error) {
           console.log(error);
         } finally {
@@ -462,13 +464,132 @@ const renderEcharts = async (dateList: Array<any>, valueList: Array<any>) => {
   canvasMain.value.setOption(option);
 };
 
+// 地图渲染
+const mapDOM = ref<HTMLDivElement>();
+const mapMain = ref<any>();
+let worldRegistered = false;
+let isoToName: Record<string, string> = {};
+let worldIsoList: Array<string> = [];
+const ensureWorldMap = async () => {
+  if (worldRegistered) return;
+  try {
+    // 使用包含 ISO3166-1-Alpha-2 的世界国家 GeoJSON，便于与后端的国家代码对齐
+    const res = await fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson');
+    const geoJSON = await res.json();
+    // 构建 iso2 到英文名称的映射，用于提示展示
+    try {
+      isoToName = (geoJSON.features || []).reduce((acc: any, f: any) => {
+        const iso2 = f?.properties?.['ISO3166-1-Alpha-2'];
+        const name = f?.properties?.name;
+        if (iso2) acc[iso2] = name || iso2;
+        return acc;
+      }, {} as Record<string, string>);
+      worldIsoList = Object.keys(isoToName);
+    } catch (_) {
+      isoToName = {};
+      worldIsoList = [];
+    }
+    echarts.registerMap('world', geoJSON);
+    worldRegistered = true;
+  } catch (error) {
+    console.error('加载世界地图失败', error);
+  }
+};
+const toNumber = (v: any) => {
+  if (typeof v === 'number') return v;
+  const s = String(v || '0').trim();
+  if (s.endsWith('K')) return Math.round(parseFloat(s) * 1000);
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+};
+const renderWorldMap = async (areaList: Array<any> = []) => {
+  await ensureWorldMap();
+  if (!mapMain.value) return;
+  // 以 ISO2 为键，按“绝对访问量”映射亮度，并补齐无数据国家为 0
+  const valueByIso: Record<string, number> = areaList.reduce((m: any, i: any) => {
+    m[i.name] = toNumber(i.value);
+    return m;
+  }, {} as Record<string, number>);
+  const mapData = (worldIsoList.length ? worldIsoList : Object.keys(valueByIso)).map((iso: string) => {
+    const raw = valueByIso[iso] || 0;
+    // value 用绝对访问量（在 piecewise 中分段映射），raw 用于 tooltip 展示
+    const value = raw;
+    return { name: iso, value, raw };
+  });
+  const option = {
+    animation: false,
+    tooltip: { trigger: 'item', formatter: (params: any) => `${isoToName[params.name] || params.name}: ${params.value || 0} visitors` },
+    visualMap: {
+      type: 'piecewise',
+      left: 20,
+      bottom: 20,
+      text: ['更多', '更少'],
+      // 绝对访问量分段映射，确保不同时间段亮度标准一致
+      pieces: [
+        { lte: 0, color: '#182232', label: '0' },
+        { gt: 0, lte: 9, color: '#203046', label: '1-9' },
+        { gt: 9, lte: 99, color: '#294365', label: '10-99' },
+        { gt: 99, lte: 999, color: '#355e98', label: '100-999' },
+        { gt: 999, lte: 9999, color: '#4a7fea', label: '1k-9.9k' },
+        { gt: 9999, lte: 99999, color: '#8fb5ff', label: '10k-99k' },
+        { gt: 99999, color: '#ffffff', label: '≥100k' }
+      ]
+    },
+    series: [
+      {
+        type: 'map',
+        map: 'world',
+        roam: true,
+        // 与数据中使用的 name 字段对齐
+        nameProperty: 'ISO3166-1-Alpha-2',
+        label: { show: false },
+        itemStyle: { areaColor: '#0f1621', borderColor: '#8aa0b5', borderWidth: 0.9 },
+        emphasis: { label: { show: false }, itemStyle: { areaColor: '#3b82f6', borderColor: '#cfe1f0', borderWidth: 1.2 } },
+        data: mapData,
+        zoom: 1.45,
+        scaleLimit: { min: 0.6, max: 32 },
+        layoutCenter: ['50%', '50%'],
+        layoutSize: '100%',
+        // 提高缩放、拖拽的响应速度，禁用系列动画
+        animation: false,
+        progressive: 0,
+        progressiveThreshold: 0,
+        selectedMode: false
+      }
+    ]
+  } as any;
+  mapMain.value.setOption(option, { notMerge: true });
+};
+
 onMounted(() => {
   //   图表
   canvasMain.value = markRaw(echarts.init(echartsDOM.value, null, { renderer: "svg", useDirtyRect: true }));
   window.addEventListener("resize", canvasMain.value.resize);
+  //   地图
+  mapMain.value = markRaw(echarts.init(mapDOM.value as unknown as HTMLDivElement, null, { renderer: 'svg', useDirtyRect: true }));
+  // 开启默认平移与滚轮缩放（roam: true 已启用），设置为手势友好
+  // 调整缩放灵敏度与动画，提升交互顺滑度
+  // 降低更新动画时长，进一步提升交互即时性
+  mapMain.value.setOption({
+    animation: false,
+    series: [{ animation: false }]
+  });
+  window.addEventListener('resize', mapMain.value.resize);
   // 站点列表
   getSiteList()
 })
+
+// 组件卸载清理
+if (import.meta.hot) {
+  import.meta.hot.on('vite:beforeFullReload', () => {
+    try {
+      window.removeEventListener('resize', canvasMain.value?.resize);
+      window.removeEventListener('resize', mapMain.value?.resize);
+      canvasMain.value?.dispose?.();
+      mapMain.value?.dispose?.();
+    } catch (e) {}
+  })
+}
 </script>
 <style>
 .fixed.inset-0.z-50,
