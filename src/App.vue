@@ -25,10 +25,10 @@
             <div class="w-3/6">
               <Select :disabled="siteList.length < 1 || getDatasStatus" v-model="siteValue"
                 @update:model-value="getDatas">
-                <SelectTrigger class="w-[218px]">
+                <SelectTrigger class="w-[218px] bg-white/80 text-gray-900 border border-white/60 backdrop-blur-md shadow-sm hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50">
                   <SelectValue placeholder="选择站点" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent class="bg-white/95 text-gray-900 border border-gray-200 backdrop-blur-md shadow-xl">
                   <SelectGroup>
                     <SelectLabel>Web Site</SelectLabel>
                     <SelectItem :value="i" v-for="i in siteList" :key="i">{{ i }}</SelectItem>
@@ -39,10 +39,10 @@
             <div class="w-3/6">
               <Select :disabled="siteList.length < 1 || getDatasStatus" v-model="timeValue"
                 @update:model-value="getDatas">
-                <SelectTrigger class="w-[218px]">
+                <SelectTrigger class="w-[218px] bg-white/80 text-gray-900 border border-white/60 backdrop-blur-md shadow-sm hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-blue-400/50">
                   <SelectValue placeholder="选择周期" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent class="bg-white/95 text-gray-900 border border-gray-200 backdrop-blur-md shadow-xl">
                   <SelectGroup>
                     <SelectLabel>Cycle Time</SelectLabel>
                     <SelectItem :value="i.value" v-for="i in timeList" :key="i.name">{{ i.name }}</SelectItem>
@@ -52,7 +52,7 @@
             </div>
           </div>
           <div
-            class="flex justify-end text-center md:text-right line-clamp-1 [&>.views-item]:flex [&>.views-item]:flex-col [&>.views-item]:items-center md:[&>.views-item]:items-end [&>.views-item]:gap-4 [&>.views-item>span]:text-sm [&>.views-item>p]:text-3xl [&>.views-item>p]:line-clamp-1 [&>.views-item>p]:w-full">
+            class="flex justify-end text-center md:text-right line-clamp-1 [&>.views-item]:flex [&>.views-item]:flex-col [&>.views-item]:items-center md:[&>.views-item]:items-end [&>.views-item]:gap-4 [&>.views-item>span]:text-sm [&>.views-item>p]:text-3xl [&>.views-item>p]:line-clamp-1 [&>.views-item>p]:w-full bg-white/80 text-gray-900 border border-white/60 rounded-lg px-3 py-2 backdrop-blur-md shadow-sm">
             <div class="views-item w-full overflow-hidden">
               <span>Views</span>
               <div class="space-y-2 w-[50%]" v-if="resData.visit.views === undefined">
@@ -564,7 +564,23 @@ const renderWorldMap = async (areaList: Array<any> = []) => {
         animation: false,
         progressive: 0,
         progressiveThreshold: 0,
-        selectedMode: false
+        selectedMode: false,
+        // 为小区域（如 HK/MO）增加标记点，确保可见
+        markPoint: {
+          animation: false,
+          symbol: 'circle',
+          symbolSize: (val: any) => {
+            const raw = Array.isArray(val) ? (val[2] || 0) : 0;
+            const size = Math.max(6, Math.min(18, Math.log10((raw || 0) + 10) * 6));
+            return size;
+          },
+          label: { show: false },
+          itemStyle: { color: '#FFD166', borderColor: '#ffffff', borderWidth: 0.6 },
+          data: [
+            (() => { const raw = (valueByIso['HK'] || valueByIso['CN-HK'] || 0); return raw > 0 ? { name: 'HK', coord: [114.1694, 22.3193], value: raw } : null })(),
+            (() => { const raw = (valueByIso['MO'] || valueByIso['CN-MO'] || 0); return raw > 0 ? { name: 'MO', coord: [113.5439, 22.1987], value: raw } : null })()
+          ].filter(Boolean) as any
+        }
       }
     ]
   } as any;
@@ -587,6 +603,47 @@ onMounted(() => {
   window.addEventListener('resize', mapMain.value.resize);
   // 站点列表
   getSiteList()
+
+  // 加载随机 ACG 背景（并发预加载 + 本地缓存 + 首屏更亮）
+  ;(() => {
+    const root = document.querySelector('.han_analytics') as HTMLElement | null;
+    if (!root) return;
+    root.classList.add('acg-loading');
+    const setBg = (url: string) => {
+      root.style.setProperty('--acg-bg-url', `url(${url})`);
+      root.classList.remove('acg-loading');
+      root.classList.add('acg-ready');
+      try { localStorage.setItem('acg_bg_last', url); } catch {}
+    };
+    // 先用缓存的一张，避免首屏过暗
+    try {
+      const cached = localStorage.getItem('acg_bg_last');
+      if (cached) setBg(cached);
+    } catch {}
+    const sources = [
+      'https://api.ixiaowai.cn/api/api.php',
+      'https://www.dmoe.cc/random.php',
+      'https://api.btstu.cn/sjbz/api.php?lx=dongman&format=images',
+      'https://img.xjh.me/random_img.php?type=bg&ctype=acg&return=302'
+    ];
+    const preload = (rawUrl: string) => new Promise<string>((resolve, reject) => {
+      const url = rawUrl + (rawUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+      const img = new Image();
+      img.onload = () => resolve(url);
+      img.onerror = reject;
+      img.src = url;
+    });
+    let done = false;
+    const timer = setTimeout(() => { done = true; }, 1800);
+    sources.forEach((src) => {
+      preload(src).then((url) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        setBg(url);
+      }).catch(() => {});
+    });
+  })();
 })
 
 // 组件卸载清理
